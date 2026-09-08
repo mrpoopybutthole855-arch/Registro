@@ -201,6 +201,63 @@ let trajetoInterval = null;
 const STORAGE_KEY = 'exame_em_andamento';
 const INTERVALO_TRAJETO_MS = 30000; // captura um ponto a cada 30 segundos
 
+// ======= MEMÓRIA DE PREFERÊNCIAS (categoria + dupla) =======
+// Fica separada do STORAGE_KEY de propósito: é uma configuração de longo
+// prazo (dura o turno/dia inteiro), não um dado do exame em andamento —
+// por isso o botão "Limpar todos os dados (uso em teste)" não mexe aqui.
+const PREF_KEY = 'exame_preferencias';
+let sugestaoObservacoesAtual = ''; // último texto que O APP sugeriu, pra saber se o usuário editou
+
+function getPreferencias(){
+  try{ return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; }
+  catch(e){ return {}; }
+}
+
+function salvarPreferencias(parciais){
+  const atuais = getPreferencias();
+  localStorage.setItem(PREF_KEY, JSON.stringify(Object.assign(atuais, parciais)));
+}
+
+// Monta o texto padrão de observações pra categoria escolhida:
+// "Sozinho" pra A/C/D/E, ou "Dupla (Posição alternada)" pra B.
+function gerarSugestaoObservacoes(cat){
+  if(!cat) return '';
+  if(cat === 'B'){
+    const prefs = getPreferencias();
+    if(!prefs.ultimaDuplaNome) return ''; // ainda não sabemos quem é a dupla — primeira vez
+    const proxima = prefs.ultimaDuplaPosicao === 'Primeiro' ? 'Segundo' : 'Primeiro';
+    return prefs.ultimaDuplaNome + ' (' + proxima + ')';
+  }
+  return 'Sozinho';
+}
+
+// Aplica a sugestão no campo, mas só se estiver vazio ou ainda for
+// exatamente a última sugestão (nunca sobrescreve o que você editou).
+function aplicarSugestaoObservacoes(cat){
+  const sugestao = gerarSugestaoObservacoes(cat);
+  const campo = document.getElementById('observacoes');
+  const valorAtual = campo.value.trim();
+  if(valorAtual === '' || valorAtual === sugestaoObservacoesAtual.trim()){
+    campo.value = sugestao;
+    sugestaoObservacoesAtual = sugestao;
+  }
+}
+
+// Pré-seleciona a última categoria usada e já aplica a sugestão de
+// observações correspondente. Usada ao abrir o app (sem exame em
+// andamento) e depois de cada envio, pra manter a categoria "grudada".
+function aplicarCategoriaPadrao(){
+  const prefs = getPreferencias();
+  if(!prefs.ultimaCategoria) return;
+  const chip = document.querySelector('#categoriaGrid .chip[data-value="' + prefs.ultimaCategoria + '"]');
+  if(!chip) return;
+  document.querySelectorAll('#categoriaGrid .chip').forEach(c=>c.classList.remove('active'));
+  chip.classList.add('active');
+  categoria = prefs.ultimaCategoria;
+  aplicarSugestaoObservacoes(categoria);
+}
+// ==============================================================
+
 function salvarProgresso(){
   if(!startTime) { localStorage.removeItem(STORAGE_KEY); return; }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -432,6 +489,8 @@ document.querySelectorAll('#categoriaGrid .chip').forEach(chip=>{
     document.querySelectorAll('#categoriaGrid .chip').forEach(c=>c.classList.remove('active'));
     chip.classList.add('active');
     categoria = chip.dataset.value;
+    salvarPreferencias({ ultimaCategoria: categoria });
+    aplicarSugestaoObservacoes(categoria);
     salvarProgresso();
   });
 });
@@ -585,6 +644,18 @@ document.getElementById('btnSubmit').addEventListener('click', async ()=>{
   if(!categoria){ showToast('Selecione a categoria.', true); return; }
   if(!resultado){ showToast('Selecione o resultado.', true); return; }
 
+  // Categoria B: reconhece "Dupla (Primeiro)" ou "Dupla (Segundo)" no texto
+  // que está sendo realmente enviado agora, e guarda pra alternar da
+  // próxima vez. Só atualiza se o padrão bater — não trava o envio se não bater.
+  if(categoria === 'B'){
+    const textoObs = document.getElementById('observacoes').value;
+    const m = textoObs.match(/^(.*?)\s*\((Primeiro|Segundo)\)/i);
+    if(m && m[1].trim()){
+      const posicaoNormalizada = /primeiro/i.test(m[2]) ? 'Primeiro' : 'Segundo';
+      salvarPreferencias({ ultimaDuplaNome: m[1].trim(), ultimaDuplaPosicao: posicaoNormalizada });
+    }
+  }
+
   const payload = {
     dataExame: document.getElementById('dataExame').value,
     horaInicio: startTime ? fmtTime(startTime) : '',
@@ -645,6 +716,7 @@ function resetForm(){
   photoBtn.textContent = '📷 Tirar foto do Slip';
   photoBtn.classList.remove('filled');
   document.getElementById('dataExame').value = new Date().toISOString().split('T')[0];
+  aplicarCategoriaPadrao(); // já deixa a próxima categoria e observações pré-preenchidas
 }
 
 // Salva o progresso a cada alteração no campo de observações
@@ -686,6 +758,12 @@ if ('serviceWorker' in navigator) {
 // Fica no final do arquivo de propósito: só roda depois que todos os
 // elementos (foto, chips, observações) já foram declarados acima.
 restaurarProgresso();
+
+// Se não havia nenhum exame em andamento pra restaurar (categoria ainda
+// vazia), aplica a última categoria usada + observações padrão.
+if(!categoria){
+  aplicarCategoriaPadrao();
+}
 </script>
 </body>
 </html>
