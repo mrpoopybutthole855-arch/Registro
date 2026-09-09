@@ -101,6 +101,7 @@
 <body>
 
 <h1>Registro de Exame Prático</h1>
+<div style="text-align:center; font-size:10px; color:#5a5a60; margin-top:-12px; margin-bottom:14px; letter-spacing:.5px;">v1.0</div>
 
 <!-- FILA PENDENTE -->
 <div class="card" id="filaCard" style="display:none; text-align:center; border-color:var(--warn);">
@@ -185,6 +186,11 @@
 <div class="footer-note">Dados salvos com carimbo do servidor + GPS de auditoria</div>
 
 <div class="toast" id="toast"></div>
+
+<div id="autoSendBanner" style="display:none; position:fixed; left:14px; right:14px; bottom:20px; background:var(--warn); color:#2a1400; border-radius:14px; padding:14px 16px; z-index:60; align-items:center; justify-content:space-between; gap:10px; font-weight:700; font-size:14px;">
+  <span id="autoSendText">Enviando automaticamente em 3s...</span>
+  <button id="btnCancelarEnvioAuto" style="background:#2a1400; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-weight:700; font-size:13px; white-space:nowrap;">Cancelar</button>
+</div>
 
 <script>
 // ======= CONFIGURAÇÃO =======
@@ -504,6 +510,14 @@ document.querySelectorAll('#resultadoGrid .chip').forEach(chip=>{
     if(negResults.includes(chip.dataset.value)) chip.classList.add('result-neg');
     resultado = chip.dataset.value;
     salvarProgresso();
+
+    // Envio automático: só para Aprovado/Reprovado, e só se já estiver
+    // tudo preenchido no instante do toque. Cancela qualquer agendamento
+    // anterior primeiro (ex: trocou de resultado antes dos 3s acabarem).
+    cancelarEnvioAutomatico();
+    if((resultado === 'Aprovado' || resultado === 'Reprovado') && obterCamposFaltando().length === 0){
+      agendarEnvioAutomatico();
+    }
   });
 });
 
@@ -638,11 +652,25 @@ function calcDuracao(){
   return pad(h)+':'+pad(m)+':'+pad(s);
 }
 
-document.getElementById('btnSubmit').addEventListener('click', async ()=>{
-  // Validações mínimas
-  if(!startTime){ showToast('Inicie o exame antes de enviar.', true); return; }
-  if(!categoria){ showToast('Selecione a categoria.', true); return; }
-  if(!resultado){ showToast('Selecione o resultado.', true); return; }
+// Lista os nomes dos campos obrigatórios que ainda estão faltando.
+// Array vazio = pode enviar. Usada tanto pelo botão manual quanto
+// pelo envio automático ao marcar Aprovado/Reprovado.
+function obterCamposFaltando(){
+  const faltando = [];
+  if(!startTime) faltando.push('Iniciar o exame');
+  if(!categoria) faltando.push('Categoria');
+  if(!resultado) faltando.push('Resultado');
+  if(!document.getElementById('observacoes').value.trim()) faltando.push('Observações');
+  if(!fotoBase64) faltando.push('Foto do Slip');
+  return faltando;
+}
+
+async function enviarRegistroAtual(){
+  const faltando = obterCamposFaltando();
+  if(faltando.length > 0){
+    showToast('Faltando preencher: ' + faltando.join(', '), true);
+    return;
+  }
 
   // Categoria B: reconhece "Dupla (Primeiro)" ou "Dupla (Segundo)" no texto
   // que está sendo realmente enviado agora, e guarda pra alternar da
@@ -688,9 +716,58 @@ document.getElementById('btnSubmit').addEventListener('click', async ()=>{
     btn.disabled = false;
     btn.textContent = 'ENVIAR REGISTRO';
   }
-});
+}
+
+document.getElementById('btnSubmit').addEventListener('click', () => enviarRegistroAtual());
+
+// ======= ENVIO AUTOMÁTICO AO MARCAR APROVADO/REPROVADO =======
+// Só dispara se, no instante do toque, TODOS os campos obrigatórios já
+// estiverem preenchidos. Dá 3 segundos de "toque para cancelar" antes
+// de enviar de verdade, pra proteger contra toque errado.
+let autoSendTimeoutId = null;
+let autoSendIntervalId = null;
+
+function agendarEnvioAutomatico(){
+  cancelarEnvioAutomatico();
+  let segundosRestantes = 3;
+  const banner = document.getElementById('autoSendBanner');
+  const texto = document.getElementById('autoSendText');
+  banner.style.display = 'flex';
+  texto.textContent = 'Enviando automaticamente em ' + segundosRestantes + 's...';
+
+  autoSendIntervalId = setInterval(() => {
+    segundosRestantes--;
+    if(segundosRestantes > 0){
+      texto.textContent = 'Enviando automaticamente em ' + segundosRestantes + 's...';
+    }
+  }, 1000);
+
+  autoSendTimeoutId = setTimeout(() => {
+    clearInterval(autoSendIntervalId);
+    autoSendIntervalId = null;
+    autoSendTimeoutId = null;
+    banner.style.display = 'none';
+    enviarRegistroAtual();
+  }, 3000);
+}
+
+function cancelarEnvioAutomatico(){
+  if(autoSendTimeoutId){ clearTimeout(autoSendTimeoutId); autoSendTimeoutId = null; }
+  if(autoSendIntervalId){ clearInterval(autoSendIntervalId); autoSendIntervalId = null; }
+  const banner = document.getElementById('autoSendBanner');
+  if(banner) banner.style.display = 'none';
+}
+document.getElementById('btnCancelarEnvioAuto').addEventListener('click', cancelarEnvioAutomatico);
+
+// Se você mexer em qualquer outro campo durante os 3 segundos de espera,
+// cancela o envio automático (pode ter percebido que precisa ajustar algo)
+document.getElementById('observacoes').addEventListener('input', cancelarEnvioAutomatico);
+photoInput.addEventListener('change', cancelarEnvioAutomatico);
+document.querySelectorAll('#categoriaGrid .chip').forEach(c => c.addEventListener('click', cancelarEnvioAutomatico));
+// ================================================================
 
 function resetForm(){
+  cancelarEnvioAutomatico();
   localStorage.removeItem(STORAGE_KEY);
   startTime = null; endTime = null; gpsStart = null; gpsEnd = null;
   categoria = null; resultado = null; fotoBase64 = null;
